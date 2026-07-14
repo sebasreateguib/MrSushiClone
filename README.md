@@ -1,88 +1,90 @@
-# Sistema de Pedidos Online - Backend de Trabajadores (Mr Sushi)
+# MrSushi - Proyecto Final (CS2032 Cloud Computing)
 
-Este repositorio contiene el **Backend Serverless** para la gestión operativa y el panel de trabajadores de Mr Sushi. Forma parte de una arquitectura basada en eventos (EDA) y utiliza Node.js con el Serverless Framework.
+Este es el repositorio principal del proyecto **MrSushi**, un sistema integral para la gestión de pedidos de un restaurante de sushi. El proyecto cuenta con una arquitectura orientada a la nube (AWS Serverless) y se divide en múltiples aplicaciones para clientes y trabajadores.
 
----
+## 🏗️ Estructura y Arquitectura del Proyecto
 
-## Arquitectura y Tecnologías
+El sistema está dividido en 4 componentes principales:
 
-- **Runtime:** Node.js 18.x
-- **Framework:** Serverless Framework (v3)
-- **Infraestructura AWS:** Lambda, API Gateway (HTTP API), DynamoDB
-- **Autenticación:** JWT (JSON Web Tokens)
-- **Multi-tenancy:** Particionado por `tenantId` (ej. `mrsushi`)
+### 1. 🍣 Frontend Cliente (`/MR_sushi`)
+Aplicación web orientada a los clientes del restaurante.
+- **Tecnologías:** React, Vite, Leaflet (mapas).
+- **Funcionalidades:** Permite a los clientes registrarse, iniciar sesión, crear pedidos y hacer un seguimiento del estado del mismo.
 
-El backend de trabajadores comparte tablas de DynamoDB (órdenes) y el bus de eventos de EventBridge con el backend de clientes (`backend_cliente`), pero mantiene su propia tabla de trabajadores (`WorkersTable`) y maneja la autenticación de manera independiente.
+### 2. 👨‍🍳 Frontend Trabajadores (`/frontend_trabajador`)
+Panel de control (Kitchen Control) para el personal interno (cocina, empaque, entrega).
+- **Tecnologías:** React 18, Vite, Tailwind CSS v3, TypeScript, Lucide React.
+- **Funcionalidades:** Tablero Kanban (Drag & Drop) para mover los pedidos por las distintas etapas operativas (`Recibidos` → `Cocinando` → `Empacando` → `En reparto` → `Entregados`), dashboard en tiempo real y autenticación por roles.
+- *Nota: Soporta un "Modo Demo" local sin conexión a backend.*
 
----
+### 3. ☁️ Backend Core / Cliente (`/backend_cliente/backend`)
+Servicio backend serverless en AWS principal que orquesta los pedidos y clientes.
+- **Tecnologías:** AWS Lambda, API Gateway, DynamoDB, EventBridge, AWS Step Functions, Serverless Framework, Node.js.
+- **Funcionalidades:** Gestión de usuarios (auth con JWT y bcrypt), endpoints para creación y seguimiento de pedidos. Orquesta el flujo de trabajo utilizando el patrón *Step Functions (Wait for Callback with Task Token)*, pausando la ejecución (sin costo) hasta que los trabajadores avanzan el estado del pedido. Emite eventos a un bus de EventBridge (`mrsushi-pedidos-bus`).
 
-## Endpoints (API de Trabajadores)
-
-El backend expone las siguientes rutas a través de AWS API Gateway:
-
-### Autenticación
-| Endpoint | Método | Descripción |
-|---|---|---|
-| `/workers/auth/login` | `POST` | Autenticación exclusiva para trabajadores (admin, cocinero, empacador, repartidor). Devuelve un token JWT. |
-
-### Panel de Pedidos
-Requieren un token JWT válido en el header `Authorization`.
-
-| Endpoint | Método | Descripción |
-|---|---|---|
-| `/workers/orders` | `GET` | Lista todos los pedidos activos para el panel del trabajador. |
-| `/workers/orders/{orderId}` | `GET` | Obtiene el detalle completo de un pedido, incluyendo el progreso (steps) y los task tokens asociados de Step Functions. |
-
-### Flujo de Trabajo (Workflow)
-Estos endpoints permiten al trabajador avanzar el estado de preparación y entrega de un pedido.
-
-| Endpoint | Método | Descripción |
-|---|---|---|
-| `/workers/orders/{orderId}/steps/{step}/iniciar` | `POST` | El trabajador toma y asigna un paso específico del pedido (ej. empezar a cocinar). |
-| `/workers/orders/{orderId}/steps/{step}/completar` | `POST` | El trabajador completa un paso, lo que envía la señal a AWS Step Functions para avanzar el flujo del pedido. |
+### 4. ⚙️ Backend Trabajadores (`/backend`)
+Servicio backend serverless complementario para el panel de trabajadores.
+- **Tecnologías:** AWS (DynamoDB, EventBridge, Step Functions), Node.js, Serverless Framework.
+- **Funcionalidades:** Provee los endpoints necesarios para que los trabajadores consulten y avancen el estado de los pedidos que están en la base de datos de DynamoDB orquestada por el core.
 
 ---
 
-## Estructura de DynamoDB
+## 🚀 Requisitos Previos
 
-- **WorkersTable:** Almacena los perfiles y credenciales de los trabajadores. 
-  - `Partition Key (PK):` `tenantId`
-  - `Sort Key (SK):` `email`
-- **OrdersTable:** (Compartida) Almacena el estado y detalle de los pedidos.
+- **Node.js** (v18.x o superior recomendado)
+- **AWS CLI** configurado con credenciales válidas
+- **Serverless Framework** (`npm install -g serverless`)
 
 ---
 
-## Configuración y Despliegue
+## 🛠️ Cómo Iniciar y Desplegar el Proyecto
 
-### 1. Variables de Entorno
-Copia el archivo `.env.example` a `.env` y configura el secreto JWT. Este secreto debe coincidir con el utilizado en `backend_cliente` para que los tokens sean compatibles.
-```bash
-cp backend/.env.example backend/.env
-```
+Cada componente tiene su propio entorno. Debes configurar y ejecutar cada uno de forma independiente:
 
-### 2. Instalación de Dependencias
-```bash
-cd backend
-npm install
-```
+### Backends
+Debes desplegar ambos servicios serverless en tu cuenta de AWS.
 
-### 3. Despliegue
-Antes de desplegar, asegúrate de:
-1. Reemplazar `TU_ACCOUNT_ID` en `backend/serverless.yml` con tu ID de cuenta AWS (si usas el LabRole).
-2. Haber desplegado primero el `backend_cliente` (ya que este servicio asume que las tablas y el bus de eventos compartidos ya existen).
+1. **Backend Cliente / Core:**
+   ```bash
+   cd backend_cliente/backend
+   npm install
+   export JWT_SECRET="tu-secreto-seguro" # Define un secreto para JWT
+   npx serverless deploy --stage dev
+   ```
+   *Al finalizar, Serverless te imprimirá un `HttpApiUrl`. Deberás copiar esta URL para conectarla a tus frontends.*
 
-Despliegue a AWS:
-```bash
-npx sls deploy
-```
+2. **Backend Trabajadores:**
+   ```bash
+   cd backend
+   npm install
+   npx serverless deploy --stage dev
+   ```
 
-*(Opcional) Puedes desplegar a un stage específico:*
-```bash
-npx sls deploy --stage dev
-```
+### Frontends
+Asegúrate de configurar las variables de entorno en ambos frontends usando las URLs API obtenidas de los backends correspondientes.
 
-### 4. Creación del Primer Trabajador
-Una vez desplegado, puedes crear un trabajador de prueba usando el script proporcionado:
-```bash
-node scripts/seedWorker.js
-```
+1. **Frontend Cliente:**
+   ```bash
+   cd MR_sushi
+   npm install
+   # Configura las URLs de la API en el código / .env
+   npm run dev
+   ```
+
+2. **Frontend Trabajadores:**
+   ```bash
+   cd frontend_trabajador
+   npm install
+   cp .env.example .env
+   # Edita el archivo .env e ingresa la variable VITE_API_URL con la URL de tu backend
+   npm run dev
+   ```
+
+---
+
+## 📄 Documentación Adicional
+
+Puedes encontrar información técnica más detallada leyendo los archivos `README.md` ubicados dentro de las carpetas de los sub-proyectos y el documento del proyecto original:
+- [Frontend Trabajadores README](./frontend_trabajador/README.md)
+- [Backend Cliente / Core README](./backend_cliente/backend/README.md)
+- Documento de especificación general: [Proyecto-Final.pdf](./Proyecto-Final.pdf)

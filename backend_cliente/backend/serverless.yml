@@ -1,0 +1,215 @@
+org: TU_ORG_DE_SERVERLESS
+service: mrsushi-backend
+
+frameworkVersion: '3'
+
+plugins:
+  - serverless-step-functions
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  memorySize: 1024
+  timeout: 30
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  iam:
+    role: arn:aws:iam::TU_ACCOUNT_ID:role/LabRole
+  environment:
+    STAGE: ${sls:stage}
+    TENANT_ID: mrsushi
+    USERS_TABLE: ${sls:stage}-mrsushi-users
+    ORDERS_TABLE: ${sls:stage}-mrsushi-orders
+    EVENT_BUS_NAME: ${sls:stage}-mrsushi-pedidos-bus
+    JWT_SECRET: ${env:JWT_SECRET, 'cambia-este-secreto-en-produccion'}
+    STATE_MACHINE_ARN: !Ref PedidoWorkflowStateMachine
+  httpApi:
+    cors: true
+
+functions:
+
+  # ----- Auth (usado por la web de clientes) -----
+  register:
+    handler: src/handlers/auth/register.handler
+    events:
+      - httpApi: 'POST /auth/register'
+
+  login:
+    handler: src/handlers/auth/login.handler
+    events:
+      - httpApi: 'POST /auth/login'
+
+  # ----- Pedidos (cliente web + api Rappi en otra nube pueden llamar aqui) -----
+  createOrder:
+    handler: src/handlers/orders/createOrder.handler
+    events:
+      - httpApi: 'POST /orders'
+
+  getOrder:
+    handler: src/handlers/orders/getOrder.handler
+    events:
+      - httpApi: 'GET /orders/{orderId}'
+
+  listMyOrders:
+    handler: src/handlers/orders/listOrders.handler
+    events:
+      - httpApi: 'GET /orders'
+
+  # ----- Arranca el Step Functions cuando se crea un pedido (EDA, sin rol IAM custom) -----
+  startWorkflow:
+    handler: src/handlers/workflow/startWorkflow.handler
+    events:
+      - eventBridge:
+          eventBus: !GetAtt PedidosEventBus.Arn
+          pattern:
+            source: [mrsushi.orders]
+            detail-type: [OrderCreated]
+
+  # ----- Consumidor de eventos del workflow: guarda el taskToken de Step Functions -----
+  onWorkflowEvent:
+    handler: src/handlers/workflow/onWorkflowEvent.handler
+    events:
+      - eventBridge:
+          eventBus: !GetAtt PedidosEventBus.Arn
+          pattern:
+            source: [mrsushi.workflow]
+            detail-type: [CocinaPendiente, EmpaquePendiente, EntregaPendiente]
+
+  # ----- Usados por la web de TRABAJADORES para avanzar el pedido -----
+  iniciarPaso:
+    handler: src/handlers/workflow/iniciarPaso.handler
+    events:
+      - httpApi: 'POST /orders/{orderId}/steps/{step}/iniciar'
+
+  completarPaso:
+    handler: src/handlers/workflow/completarPaso.handler
+    events:
+      - httpApi: 'POST /orders/{orderId}/steps/{step}/completar'
+
+stepFunctions:
+  stateMachines:
+    pedidoWorkflow:
+      name: ${sls:stage}-mrsushi-pedido-workflow
+      id: PedidoWorkflowStateMachine
+      definition:
+        Comment: "Flujo de un pedido: cocina -> empaque -> entrega, usando Wait for Callback with Task Token"
+        StartAt: EsperarCocina
+        States:
+
+          EsperarCocina:
+            Type: Task
+            Resource: arn:aws:states:::events:putEvents.waitForTaskToken
+            Parameters:
+              Entries:
+                - Detail:
+                    orderId.$: "$.orderId"
+                    tenantId.$: "$.tenantId"
+                    taskToken.$: "$$.Task.Token"
+                  DetailType: CocinaPendiente
+                  EventBusName: ${self:provider.environment.EVENT_BUS_NAME}
+                  Source: mrsushi.workflow
+            ResultPath: "$.resultadoCocina"
+            Next: EsperarEmpaque
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                Next: PedidoFallido
+
+          EsperarEmpaque:
+            Type: Task
+            Resource: arn:aws:states:::events:putEvents.waitForTaskToken
+            Parameters:
+              Entries:
+                - Detail:
+                    orderId.$: "$.orderId"
+                    tenantId.$: "$.tenantId"
+                    taskToken.$: "$$.Task.Token"
+                  DetailType: EmpaquePendiente
+                  EventBusName: ${self:provider.environment.EVENT_BUS_NAME}
+                  Source: mrsushi.workflow
+            ResultPath: "$.resultadoEmpaque"
+            Next: EsperarEntrega
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                Next: PedidoFallido
+
+          EsperarEntrega:
+            Type: Task
+            Resource: arn:aws:states:::events:putEvents.waitForTaskToken
+            Parameters:
+              Entries:
+                - Detail:
+                    orderId.$: "$.orderId"
+                    tenantId.$: "$.tenantId"
+                    taskToken.$: "$$.Task.Token"
+                  DetailType: EntregaPendiente
+                  EventBusName: ${self:provider.environment.EVENT_BUS_NAME}
+                  Source: mrsushi.workflow
+            ResultPath: "$.resultadoEntrega"
+            Next: PedidoEntregado
+            Catch:
+              - ErrorEquals: ["States.ALL"]
+                Next: PedidoFallido
+
+          PedidoEntregado:
+            Type: Succeed
+
+          PedidoFallido:
+            Type: Fail
+            Error: "PedidoNoCompletado"
+
+resources:
+  Resources:
+
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.USERS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: tenantId
+            AttributeType: S
+          - AttributeName: email
+            AttributeType: S
+        KeySchema:
+          - AttributeName: tenantId
+            KeyType: HASH
+          - AttributeName: email
+            KeyType: RANGE
+
+    OrdersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:provider.environment.ORDERS_TABLE}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: tenantId
+            AttributeType: S
+          - AttributeName: orderId
+            AttributeType: S
+          - AttributeName: userEmail
+            AttributeType: S
+          - AttributeName: createdAt
+            AttributeType: S
+        KeySchema:
+          - AttributeName: tenantId
+            KeyType: HASH
+          - AttributeName: orderId
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: userEmail-index
+            KeySchema:
+              - AttributeName: userEmail
+                KeyType: HASH
+              - AttributeName: createdAt
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    PedidosEventBus:
+      Type: AWS::Events::EventBus
+      Properties:
+        Name: ${self:provider.environment.EVENT_BUS_NAME}
+
+  Outputs:
+    HttpApiUrl:
+      Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"

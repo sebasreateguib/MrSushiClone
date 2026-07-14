@@ -21,8 +21,3 @@ Thumbs.db
 # Documentos
 Proyecto-Final.pdf
 *.pdf
-
-# Frontend
-frontend/
-backend_cliente/
-frontend_trabajador/

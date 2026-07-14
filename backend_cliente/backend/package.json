@@ -1,0 +1,24 @@
+{
+  "name": "mrsushi-backend",
+  "version": "1.0.0",
+  "description": "Backend serverless (AWS) para Mr Sushi - CS2032 Proyecto Final",
+  "scripts": {
+    "deploy": "serverless deploy",
+    "remove": "serverless remove",
+    "logs:createOrder": "serverless logs -f createOrder -t"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.583.0",
+    "@aws-sdk/lib-dynamodb": "^3.583.0",
+    "@aws-sdk/client-eventbridge": "^3.583.0",
+    "@aws-sdk/client-sfn": "^3.583.0",
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.0.2",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "serverless": "^3.38.0",
+    "serverless-iam-roles-per-function": "^3.2.0",
+    "serverless-step-functions": "^3.19.0"
+  }
+}
